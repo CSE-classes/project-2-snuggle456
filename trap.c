@@ -11,6 +11,9 @@
 // Interrupt descriptor table (shared by all CPUs).
 struct gatedesc idt[256];
 extern uint vectors[];  // in vectors.S: array of 256 entry pointers
+int mappages(pde_t *pgdir, void *va, uint size, uint pa, int perm);
+extern int page_allocator_type;
+
 struct spinlock tickslock;
 uint ticks;
 
@@ -48,11 +51,40 @@ trap(struct trapframe *tf)
  // CS 3320 project 2
  // You might need to change the folloiwng default page fault handling
  // for your project 2
- if(tf->trapno == T_PGFLT){                 // CS 3320 project 2
-    uint faulting_va;                       // CS 3320 project 2
-    faulting_va = rcr2();                   // CS 3320 project 2
-    cprintf("Unhandled page fault for va:0x%x!\n", faulting_va);     // CS 3320 project 2
- }
+  // CS 3320 project 2
+
+if(tf->trapno == T_PGFLT){
+  uint faulting_va = rcr2();
+
+  // round down to page boundary
+  uint va = PGROUNDDOWN(faulting_va);
+
+  // Only handle user-space faults lazily for this process
+  if(proc && (tf->cs & 3) == DPL_USER &&
+     page_allocator_type == 1 &&
+     faulting_va <= proc->sz){   //  allow the byte at brk
+    char *mem = kalloc();
+    if(mem != 0){
+      memset(mem, 0, PGSIZE);
+      if(mappages(proc->pgdir, (char*)va, PGSIZE,
+                  V2P(mem), PTE_W | PTE_U) >= 0){
+        // successfully allocated and mapped the page
+        return;                  // retry the faulting instruction
+      } else {
+        kfree(mem);
+        cprintf("Allocating pages failed!\n");
+      }
+    } else {
+      // out of physical memory
+      cprintf("Allocating pages failed!\n");
+    }
+  } else if(proc && (tf->cs & 3) == DPL_USER){
+    // Either DEFAULT allocator, or faulting_va > break, etc.
+    cprintf("Unhandled page fault!\n");
+  }
+}
+
+
 
 
   switch(tf->trapno){
